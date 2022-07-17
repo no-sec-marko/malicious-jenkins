@@ -1,0 +1,82 @@
+pipeline {
+    agent any
+
+    options {
+        // add timestamps to the console log
+        timestamps()
+
+        // discard old builds, keeping a max number of 5 builds
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+    }
+
+    environment {
+        PROJECT_NAME = "PowerUp"
+        GIT_NAME = "PowerSploit"
+        POM_NAME = "powerup_pom.xml"
+    }
+
+    stages {
+    	stage('checkout') {
+    	    steps {
+                git """https://github.com/PowerShellMafia/${env.GIT_NAME}.git"""
+    	    }
+    	}
+
+        stage('obfuscate') {
+            steps {
+                powershell """
+                Import-Module Invoke-Obfuscation
+                \$obfus = Out-ObfuscatedTokenCommand -Path ${workspace}\\Privesc\\${env.PROJECT_NAME}.ps1 'String' 1
+                Add-Content -Path ${workspace}@tmp\\tmp.${env.PROJECT_NAME}.ps1 -Value \$obfus
+                \$obfus = Out-ObfuscatedTokenCommand -Path ${workspace}@tmp\\tmp.${env.PROJECT_NAME}.ps1 'Comment' 1
+
+                # remove additional obfuscation
+                # Add-Content -Path ${workspace}@tmp\\tmp.${env.PROJECT_NAME}.ps1 -Value \$obfus
+                # \$obfus = Out-ObfuscatedStringCommand -Path ${workspace}@tmp\\tmp.${env.PROJECT_NAME}.ps1 1
+
+                Write-Host "Write final file"
+                Add-Content -Path ${workspace}@tmp\\obfuscated.${env.PROJECT_NAME}.ps1 -Value \$obfus
+                """
+
+            }
+        }
+
+        stage('verify') {
+            steps {
+                echo 'Verify ..'
+                script {
+                    BATCH_COMMAND="""@echo off
+                    ThreatCheck.exe -f ${workspace}@tmp\\obfuscated.${env.PROJECT_NAME}.ps1 | findstr /C:\"Identified end of bad bytes at offset\" 1>nul
+                    """
+                    try {
+                        batExit = bat returnStatus: false,
+                        label: 'Check threat',
+                        script: """
+                        ${BATCH_COMMAND}
+                        """
+                    } catch (Exception e){
+                        unstable(message: "${STAGE_NAME} is unstable: Threat found!")
+                    }
+                }
+            }
+        }
+
+        stage('push') {
+            steps {
+                echo 'Verify ..'
+                dir('../PowerUp@tmp') {
+                    powershell """
+                    Write-Host "Upload artifact to Archiva"
+                    Compress-Archive -Force -Path ${workspace}@tmp\\obfuscated.${env.PROJECT_NAME}.ps1 ${workspace}@tmp\\obfuscated.${env.PROJECT_NAME}.ps1.zip
+                    Copy-Item -Path ${workspace}\\..\\project@share\\${env.POM_NAME} ${workspace}@tmp\\pom.xml
+                    """
+
+                    bat """
+                    mvn deploy:deploy-file -Dfile=${workspace}@tmp\\obfuscated.${env.PROJECT_NAME}.ps1.zip -DpomFile=${workspace}@tmp\\pom.xml -DrepositoryId=archiva.snapshots -Durl=https://archiva.acme.local/repository/snapshots/ -Dmaven.wagon.http.ssl.insecure=true -Dmaven.wagon.http.ssl.allowall=true -Dmaven.wagon.http.ssl.ignore.validity.dates=true
+                    """
+
+                }
+            }
+        }
+    }
+}
