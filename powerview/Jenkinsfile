@@ -1,3 +1,5 @@
+#!groovy
+
 pipeline {
     agent any
 
@@ -26,9 +28,9 @@ pipeline {
             steps {
                 powershell """
                 Import-Module Invoke-Obfuscation
-                \$obfus = Out-ObfuscatedTokenCommand -Path ${workspace}\\Recon\\${env.PROJECT_NAME}.ps1 'String' 1
-                Add-Content -Path ${workspace}@tmp\\tmp.${env.PROJECT_NAME}.ps1 -Value \$obfus
                 \$obfus = Out-ObfuscatedTokenCommand -Path ${workspace}@tmp\\tmp.${env.PROJECT_NAME}.ps1 'Comment' 1
+                Add-Content -Path ${workspace}@tmp\\tmp.${env.PROJECT_NAME}.ps1 -Value \$obfus
+                \$obfus = Out-ObfuscatedTokenCommand -Path ${workspace}\\Recon\\${env.PROJECT_NAME}.ps1 'Variable' 1
 
                 # remove additional obfuscation
                 # Add-Content -Path ${workspace}@tmp\\tmp.${env.PROJECT_NAME}.ps1 -Value \$obfus
