@@ -1,0 +1,79 @@
+pipeline {
+    agent any
+
+    environment {
+        PROJECT_NAME = "Rubeus"
+        GIT_URL = "https://github.com/GhostPack/Rubeus.git"
+        GIT_COMMIT = "41c95e7385ec6e2aa46fcb354ab3cc94e8d24166"; // Oct 19, 2020
+        PROJECT_FILE_PATH = "Rubeus.sln"
+        CONFIG = 'Release'
+        PLATFORM = 'Any CPU'
+    }
+
+   stages {
+        stage('checkout') {
+            steps {
+                // clone the code base with up to 5 retries on failure
+                script {
+                    try {
+                        checkout([
+                            $class: 'GitSCM',
+                            branches: [[name: "${env.GIT_COMMIT}"]],
+                            doGenerateSubmoduleConfigurations: false,
+                            extensions: [[$class: 'CleanBeforeCheckout']],
+                            submoduleCfg: [],
+                            userRemoteConfigs: [[url: "${env.GIT_URL}"]]
+                        ])
+                    }
+                    catch(error) {
+                        echo "Clone of ${env.GIT_URL} failed: ${error} . Retrying."
+                        retry(5) {
+                            checkout([
+                                $class: 'GitSCM',
+                                branches: [[name: "${env.GIT_COMMIT}"]],
+                                doGenerateSubmoduleConfigurations: false,
+                                extensions: [[$class: 'CleanBeforeCheckout']],
+                                submoduleCfg: [],
+                                userRemoteConfigs: [[url: "${env.GIT_URL}"]]
+                            ])
+                        }
+                    }
+                }
+           }
+        }
+
+        stage('manipulate source code') {
+            steps {
+                powershell """
+                (Get-Content -raw -path "${workspace}\\Rubeus\\Properties\\AssemblyInfo.cs") -replace "Rubeus","OWASP Rocks!" | Out-File "${workspace}\\Rubeus\\Properties\\AssemblyInfo.cs"
+                (Get-Content -raw -path "${workspace}\\Rubeus\\Properties\\AssemblyInfo.cs") -replace "658c8b7f-3664-4a95-9572-a3e5871dfc06",[guid]::NewGuid().Guid | Out-File "${workspace}\\Rubeus\\Properties\\AssemblyInfo.cs"
+                (Get-Content -raw -path "${workspace}\\Rubeus\\Rubeus.csproj") -replace "<AssemblyName>Rubeus</AssemblyName>","<AssemblyName>OWASPStammtisch29</AssemblyName>" | Out-File "${workspace}\\Rubeus\\Rubeus.csproj"
+                """
+            }
+        }
+
+        stage('compile') {
+            steps {
+                echo 'Deploying ..'
+                bat "\"${tool 'MSBuild_VS2022'}\\MSBuild.exe\" /p:Configuration=${env.CONFIG} \"/p:Platform=${env.PLATFORM}\" /maxcpucount:%NUMBER_OF_PROCESSORS% /nodeReuse:false /p:TargetFrameworkMoniker=\".NETFramework,Version=v4.8\" ${env.PROJECT_FILE_PATH}"
+                }
+        }
+
+        stage('obfuscate') {
+            steps {
+                echo 'Obfuscating ..'
+            }
+        }
+
+        stage('verify') {
+            steps {
+                echo 'Verify ..'
+            }
+        }
+        stage('push') {
+            steps {
+                echo 'Push ..'
+            }
+        }
+    }
+}
