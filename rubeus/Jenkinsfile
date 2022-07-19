@@ -1,13 +1,16 @@
+#!groovy
+
 pipeline {
     agent any
 
     environment {
         PROJECT_NAME = "Rubeus"
         GIT_URL = "https://github.com/GhostPack/Rubeus.git"
-        GIT_COMMIT = "41c95e7385ec6e2aa46fcb354ab3cc94e8d24166"; // Oct 19, 2020
+        GIT_COMMIT = "41c95e7385ec6e2aa46fcb354ab3cc94e8d24166";
         PROJECT_FILE_PATH = "Rubeus.sln"
         CONFIG = 'Release'
         PLATFORM = 'Any CPU'
+        POM_NAME = "rubeus_pom.xml"
     }
 
    stages {
@@ -42,12 +45,15 @@ pipeline {
            }
         }
 
-        stage('manipulate source code') {
+        stage('code manipulation') {
             steps {
                 powershell """
                 (Get-Content -raw -path "${workspace}\\Rubeus\\Properties\\AssemblyInfo.cs") -replace "Rubeus","OWASP Rocks!" | Out-File "${workspace}\\Rubeus\\Properties\\AssemblyInfo.cs"
                 (Get-Content -raw -path "${workspace}\\Rubeus\\Properties\\AssemblyInfo.cs") -replace "658c8b7f-3664-4a95-9572-a3e5871dfc06",[guid]::NewGuid().Guid | Out-File "${workspace}\\Rubeus\\Properties\\AssemblyInfo.cs"
                 (Get-Content -raw -path "${workspace}\\Rubeus\\Rubeus.csproj") -replace "<AssemblyName>Rubeus</AssemblyName>","<AssemblyName>OWASPStammtisch29</AssemblyName>" | Out-File "${workspace}\\Rubeus\\Rubeus.csproj"
+                (Get-Content -raw -path "${workspace}\\Rubeus\\Domain\\Info.cs") -replace "v2.1.1","v1.3.3.7" | Out-File "${workspace}\\Rubeus\\Domain\\Info.cs"
+                (Get-Content -Raw -Path "${workspace}\\Rubeus\\Domain\\Info.cs") -replace 'ShowLogo\\(\\)[\\n\\r\\s]+{(([\\s\\S]*?))}','ShowLogo() { Console.WriteLine("OWASP! v1.3.3.7");}' | Out-File "${workspace}\\Rubeus\\Domain\\Info.cs"
+                (Get-Content -Raw -Path "${workspace}\\Rubeus\\Domain\\Info.cs") -replace 'ShowUsage\\(\\)[\\n\\r\\s]+{(([\\s\\S]*?))}','ShowUsage() { Console.WriteLine("OWASP Stammtisch is back!");}' | Out-File "${workspace}\\Rubeus\\Domain\\Info.cs"
                 """
             }
         }
@@ -62,17 +68,58 @@ pipeline {
         stage('obfuscate') {
             steps {
                 echo 'Obfuscating ..'
+                bat """
+                c:\\opt\\ConfuserEx-CLI\\Confuser.CLI.exe ${workspace}\\..\\project@share\\obfuscate-rubeus.crproj
+                move ${workspace}\\Rubeus\\bin\\Release\\Confused\\OWASPStammtisch29.exe ${workspace}@tmp\\obfuscated.${env.PROJECT_NAME}.exe
+                """
             }
         }
 
         stage('verify') {
             steps {
                 echo 'Verify ..'
+                script {
+                    BATCH_COMMAND="""@echo off
+                    ThreatCheck.exe -f ${workspace}@tmp\\obfuscated.${env.PROJECT_NAME}.exe | findstr /C:\"Identified end of bad bytes at offset\" 1>nul
+                    """
+                    try {
+                        batExit = bat returnStatus: false,
+                        label: 'Check threat',
+                        script: """
+                        ${BATCH_COMMAND}
+                        """
+                    } catch (Exception e){
+                        unstable(message: "${STAGE_NAME} is unstable: Threat found!")
+                    }
+                }
             }
         }
         stage('push') {
             steps {
-                echo 'Push ..'
+                echo 'Verify ..'
+                dir('../Rubeus@tmp') {
+                    powershell """
+                    Write-Host "Upload artifact to Archiva"
+                    Compress-Archive -Force -Path ${workspace}@tmp\\obfuscated.${env.PROJECT_NAME}.exe ${workspace}@tmp\\obfuscated.${env.PROJECT_NAME}.exe.zip
+                    Copy-Item -Path ${workspace}\\..\\project@share\\${env.POM_NAME} ${workspace}@tmp\\pom.xml
+                    """
+
+                    bat """
+                    mvn deploy:deploy-file -Dfile=${workspace}@tmp\\obfuscated.${env.PROJECT_NAME}.exe.zip -DpomFile=${workspace}@tmp\\pom.xml -DrepositoryId=archiva.snapshots -Durl=https://archiva.acme.local/repository/snapshots/ -Dmaven.wagon.http.ssl.insecure=true -Dmaven.wagon.http.ssl.allowall=true -Dmaven.wagon.http.ssl.ignore.validity.dates=true
+                    """
+
+                }
+            }
+        }
+    }
+
+    post {
+        cleanup {
+
+            deleteDir()
+
+            dir("${workspace}@tmp") {
+                deleteDir()
             }
         }
     }
